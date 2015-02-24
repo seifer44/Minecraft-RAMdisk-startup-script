@@ -1,9 +1,11 @@
 # Minecraft-RAMdisk-startup-script
 Run Minecraft from a RAMdisk while preserving the files on a HDD.
 
+*This README is still under development*
+
 This script has been built off of the Minecraft Wiki startup script (located here: http://minecraft.gamepedia.com/Tutorials/Server_startup_script ). This script also backs up the server by pausing saves in the temporary location, backing up from the permanent location, then resuming saves after the backup.
 
-**It is recommended to have your tmpfs mounted on boot via /etc/fstab**
+**It is recommended to have your tmpfs mounted on boot via /etc/fstab.** I would also recommend a monitoring solution to watch the tmpfs's free space, such as with Nagios, to ensure that disk space is not filled.
 
 # Variables
 
