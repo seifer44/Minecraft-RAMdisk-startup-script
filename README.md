@@ -1,7 +1,7 @@
 # Minecraft-RAMdisk-startup-script
 Run Minecraft from a RAMdisk while preserving the files on a HDD.
 
-This has been ran on CentOS 6.5+. This should work on other Linux distributions. You may need to edit SELinux permissions for scheduling rsync in the crontab.
+This has been ran on CentOS 6.5+. This should work on other Linux distributions.
 
 This script has been built off of the Minecraft Wiki startup script (located here: http://minecraft.gamepedia.com/Tutorials/Server_startup_script ).
 
@@ -25,9 +25,10 @@ This script has been built off of the Minecraft Wiki startup script (located her
   0 * * * * /sbin/service minecraft ramsave > /var/log/minecraft/ramsave.log
 * In the $USERNAME's crontab, ensure a full backup is ran regularly (REFER TO ISSUE #1). Example of daily saves:
   5 5 * * * /sbin/service minecraft backup > /var/log/minecraft/backup.log
+* You may need to edit SELinux permissions for scheduling rsync in the crontab if it's active in your distribution.
 
 # Issues
 1. Backups do not appear to function correctly when executed from a user other than $USERNAME. I'm working on a fix for that still.
-2. If you wish to have the game start from boot, I would recommend launching the service via crontab instead of in chkconfig. This ensures that the tmpfs has been mounted. I have yet to engineer a workaround into the script. This also means that, upon shutdown, the game is not closed appropriately. Please shut down the game manually before reboot.
+2. If you wish to have the game start from boot and you're mounting via fstab, I would recommend launching the service via crontab under the user instead of in chkconfig. This ensures that the tmpfs has been mounted before starting the server. I have yet to engineer a workaround into the script. If goign this route, this means that, upon shutdown, the game is not closed appropriately. Please shut down the game manually before reboot.
 3. Relies upon the mconline.sh script (located here https://github.com/seifer44/mconlineusers ) for checking if users are online.
 4. The rsync command with the --delete switch can cause issues if the server has a severe crash and data is lost in either location. This switch can be removed if necessary, but should be re-enabled during server upgrades.
