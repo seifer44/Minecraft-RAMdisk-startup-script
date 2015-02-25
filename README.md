@@ -1,13 +1,18 @@
 # Minecraft-RAMdisk-startup-script
 Run Minecraft from a RAMdisk while preserving the files on a HDD.
 
-*This README is still under development*
+This has been ran on CentOS 6.5+. This should work on other Linux distributions.
 
-This script has been built off of the Minecraft Wiki startup script (located here: http://minecraft.gamepedia.com/Tutorials/Server_startup_script ). This script also backs up the server by pausing saves in the temporary location, backing up from the permanent location, then resuming saves after the backup.
+This script has been built off of the Minecraft Wiki startup script (located here: http://minecraft.gamepedia.com/Tutorials/Server_startup_script ).
 
-**It is recommended to have your tmpfs mounted on boot via /etc/fstab.** I would also recommend a monitoring solution to watch the tmpfs's free space, such as with Nagios, to ensure that disk space is not filled.
+**It is recommended to have your tmpfs mounted on boot via /etc/fstab.** I would also highly recommend a monitoring solution to watch the tmpfs's free space, such as with Nagios, to ensure that disk space is not filled.
 
-# Variables
+# Features
+* This script has a permanent backup to a second location. The primary location can be to the RAMdisk or another harddrive.
+* Backups are capable of being ran without shutting down the game server. Backups can still be ran if the server is offline.
+* The Minecraft server log spam is minimal when paired with the mconline.sh script (located here https://github.com/seifer44/mconlineusers ). In-game saves are not disabled and re-enabled during the rsync process if 0 users have logged in since the last RAMsave. **Note: this may need to be modified for servers that are not running vanilla jars that have extra log output. Review lines 137-143 & 147.**
+
+# Extra Variables
 
 *$MCPATH* - Your RAMdisk location where the game exists temporarily.
 
@@ -16,9 +21,13 @@ This script has been built off of the Minecraft Wiki startup script (located her
 *$BACKUPPATH* - Where you wish to have archived backups stored.
 
 # Optimal functionality
-* In the $USERNAME's crontab, ensure a ramsave is ran regularly.
+* In the $USERNAME's crontab, ensure a ramsave is ran regularly. Example for hourly saves:
+  0 * * * * /sbin/service minecraft ramsave > /var/log/minecraft/ramsave.log
+* In the $USERNAME's crontab, ensure a full backup is ran regularly (REFER TO ISSUE #1). Example of daily saves:
+  5 5 * * * /sbin/service minecraft backup > /var/log/minecraft/backup.log
 
 # Issues
-* Backups do not appear to function correctly when executed from a user other than $USERNAME. I'm working on a fix for that still.
-* If you wish to have the game start from boot, I would recommend launching the service via crontab instead of in chkconfig. This ensures that the tmpfs has been mounted. I have yet to engineer a workaround into the script. This also means that, upon shutdown, the game is not closed appropriately. Please shut down the game manually before reboot.
-* Relies upon the online.sh script for checking if users are online.
+1. Backups do not appear to function correctly when executed from a user other than $USERNAME. I'm working on a fix for that still.
+2. If you wish to have the game start from boot, I would recommend launching the service via crontab instead of in chkconfig. This ensures that the tmpfs has been mounted. I have yet to engineer a workaround into the script. This also means that, upon shutdown, the game is not closed appropriately. Please shut down the game manually before reboot.
+3. Relies upon the mconline.sh script (located here https://github.com/seifer44/mconlineusers ) for checking if users are online.
+4. The rsync command with the --delete switch can cause issues if the server has a severe crash and data is lost in either location. This switch can be removed if necessary, but should be re-enabled during server upgrades.
