@@ -1,7 +1,7 @@
 # Minecraft-RAMdisk-startup-script
 Run Minecraft from a RAMdisk while preserving the files on a HDD.
 
-This has been ran on CentOS 6.5+. This should work on other Linux distributions.
+This has been ran on CentOS 6.5+. This should work on other Linux distributions. You may need to edit SELinux permissions for scheduling rsync in the crontab.
 
 This script has been built off of the Minecraft Wiki startup script (located here: http://minecraft.gamepedia.com/Tutorials/Server_startup_script ).
 
