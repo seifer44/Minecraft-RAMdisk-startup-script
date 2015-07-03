@@ -1,8 +1,16 @@
 #!/bin/bash
-# /etc/init.d/minecraft
+# chkconfig: 2345 80 20
+# description: Starts, saves, and shuts down Minecraft.
+
+. /etc/init.d/functions
+
+##############################################################
+#
+# Minecraft RAMDisk Startup Script - CentOS
+# 2015-07-03
 #
 # https://github.com/seifer44/Minecraft-RAMdisk-startup-script/
-# Version 1.0
+# Version 2.0
 #
 ##############################################################
 #
@@ -21,279 +29,624 @@
 #
 ##############################################################
 #
-### BEGIN INIT INFO
-# Provides:   minecraft
-# Required-Start: $local_fs $remote_fs
-# Required-Stop:  $local_fs $remote_fs
-# Should-Start:   $network
-# Should-Stop:    $network
-# Default-Start:  2 3 4 5
-# Default-Stop:   0 1 6
-# Short-Description:    Minecraft server
-# Description:    Starts the minecraft server
-### END INIT INFO
+#
+#
+#####################
+###   EDITABLE    ###
+###   VARIABLES   ###
+#####################
 
-#Settings
-SERVICE='minecraft_server.jar'
-OPTIONS='nogui'
-USERNAME='minecraft'
-MCPATH='/home/minecraft/ramdisk/'
-ORIGPATH='/home/minecraft/minecraft/service/'
-BACKUPPATH='/home/minecraft/backups/recent'
-MAXHEAP=4096
-MINHEAP=256
-HISTORY=200
-CPU_COUNT=4
-INVOCATION="java -Xmx${MAXHEAP}M -Xms${MINHEAP}M -XX:+UseConcMarkSweepGC \
--XX:+CMSIncrementalPacing -XX:ParallelGCThreads=$CPU_COUNT -XX:+AggressiveOpts \
--jar $SERVICE $OPTIONS"
+# The lock file, which prevents two processes from trying to launch this same world.
+# NOTE: Make sure that the $serverusername has permissions to write to this location,
+# or the server won't start!
+# NOTE: If this isn't placed in /var/lock/subsys, your OS likely will NOT gracefully
+# shutdown the game server! Refer to the README.
+lockfile=/var/lock/subsys/minecraft
 
-#########################################
-### CORE FUNCTIONALITY - DO NOT EDIT  ###
-#########################################
+# The process ID file, which logs the process ID.
+# NOTE: Make sure that the $serverusername has permissions to write to this location,
+# or the server won't start!
+pidfile=/opt/minecraft/minecraft.pid
 
-green='\e[0;32m'
-red='\e[0;31m'
-yellow='\e[0;33m'
-NC='\e[0m' # No Color
+# The "job" lock file. This file is made when Minecraft is actively running a job
+# already. This is useful to prevent a cron job (such as ramsave) from running when
+# a server startup and shutdown is already in process, for example.
+# This file should NEVER persist.
+job_lock=/opt/minecraft/mcjob.lock
 
-ME=`whoami`
+# Log file for all output for this script. Be sure that $serverusername has read/write
+# permissions for this file!
+logfile="/var/log/minecraft"
+
+gameservice='minecraft_server.jar'
+gameoptions='nogui'
+serverusername='minecraft'
+mcpath='/opt/minecraft/service'
+origpath='/opt/minecraft/origpath'
+backuppath='/opt/minecraft/backups'
+maxheap=2048
+minheap=256
+screenhistory=200
+cpucores=2
+invocation="java -Xmx${maxheap}M -Xms${minheap}M -XX:+UseConcMarkSweepGC \
+-XX:+CMSIncrementalPacing -XX:ParallelGCThreads=$cpucores -XX:+AggressiveOpts \
+-jar $gameservice $gameoptions"
+
+#####################
+###     CORE      ###
+### FUNCTIONALITY ###
+###  DO NOT EDIT  ###
+#####################
+
+user=`whoami`
+exitcode=0
+
 as_user() {
-  if [ $ME == $USERNAME ] ; then
-    bash -c "$1"
-  else
-    su - $USERNAME -c "$1"
-  fi
+	if [ $user == $serverusername ] ; then
+		bash -c "$1"
+	else
+		su - $serverusername -c "$1"
+	fi
+}
+
+check_logpath() {
+	if [ `ls -l $logfile | grep minecraft | cut -f3 -d " "` != $serverusername ]
+	then
+		echo -n "Logging permissions: "
+		echo_failure
+		echo -e "\nUser $serverusername does not have ownership of $logpath! This will likely cause issues for log output."
+		
+		exitcode=1
+	fi
+}
+
+job_lockerror() {
+	echo_failure
+	echo -e "\nJob lock file $job_lock is present! A job is already in progress on the server.\nPlease try again in a few moments. If this error persists, you may need to verify the game server status manually."
+	
+	echo -e "ERROR: Job $1 was attempted, but failed due to another job running." >> $logfile 2>&1
+	
+	exitcode=1
+}
+
+job_lockmake() {
+	touch $job_lock >> $logfile 2>&1
+	
+	if [ $? = 0 ]
+	then
+		echo "Job lock file $job_lock created successfully." >> $logfile 2>&1
+	else
+		echo_failure
+		echo -e "\nERROR: Job lock file $job_lock was not created successfully!\nReview the service log $logfile for more information.\nAttempting to continue:"
+		echo "ERROR: Job lock file $job_lock was not created successfully! Review output above." >> $logfile 2>&1
+		
+		exitcode=1
+	fi
+}
+
+job_locktrash() {
+	rm $job_lock >> $logfile 2>&1
+	
+	if [ $? = 0 ]
+	then
+		echo "Job lock file $job_lock removed successfully." >> $logfile 2>&1
+	else
+		echo_failure
+		echo -e "\nERROR: Job lock file $job_lock was unable to be removed! This will likely cause issues with other jobs.\nReview the service log $logfile for more information.\nAttempting to continue:"
+		echo "ERROR: Job lock file $job_lock was unable to be removed! Check output above." >> $logfile
+		
+		exitcode=1
+	fi
+}
+
+# This is broken out so we can use it in the restart command as well as the start command.
+mc_startandtouch() {
+	echo "Beginning the screen session at `date`." >> $logfile 2>&1
+	
+	as_user "cd $mcpath && screen -h $screenhistory -dmS minecraft $invocation"
+	
+	if [ $? = 0 ]
+	then
+		echo "screen was started successfully. Attempting to write PID and lockfiles $pidfile $lockfile." >> $logfile 2>&1
+		
+		# Use this variable to determine if a file was unable to write a file.
+		writefile=true
+		
+		# Get the PID of the game service.
+		as_user "ls /var/run/screen/S-$serverusername | grep minecraft | cut -f1 -d . >> $pidfile 2>> $logfile"
+		if [ $? != 0 ]
+		then
+			writefile=false
+		fi
+		
+		# Create the lock file. We check if the user is root to avoid a conflict by trying to run sudo at startup.
+		if [ $user == root ]
+		then
+			touch $lockfile >> $logfile 2>&1
+		else
+			as_user "sudo touch $lockfile >> $logfile 2>&1"
+		fi
+		
+		if [ $? != 0 ]
+		then
+			writefile=false
+		fi
+		
+		if [ $writefile == false ]
+		then
+			echo_warning
+			echo -e "\nService has started, but the PID file or lock file was unable to be written! Further commands will NOT work!\nIt is recommended to shut down the server in the screen session and correct permission issues."
+			
+			echo -e "ERROR: The PID file or lock file was unable to be written! Please review that $serverusername has the appropriate permissions for both $pidfile and $lockfile.\nERROR: Service commands MAY not work appropriately!" >> $logfile 2>&1
+			exitcode=1
+		else
+			echo "PID and lock files created successfully." >> $logfile 2>&1
+			
+			echo_success
+			echo ""
+		fi
+	else
+		echo_failure
+		echo -e "\nThe screen did not execute appropriately!"
+		
+		echo -e "ERROR: Screen did not execute appropriately!\nServer invocation: $invocation" >> $logfile 2>&1
+		exitcode=1
+	fi
 }
 
 mc_start() {
-  if  pgrep -u $USERNAME -f $SERVICE > /dev/null
-  then
-    echo "$SERVICE is already running!"
-  else
-    echo -n "Starting Minecraft Server:                               "
-
-        #Copy from original path to RAMdisk.
-
-        cd $ORIGPATH
-        as_user "cp -R * $MCPATH"
-    cd $MCPATH
-    as_user "cd $MCPATH && screen -h $HISTORY -dmS minecraft $INVOCATION"
-    sleep 7
-    if pgrep -u $USERNAME -f $SERVICE > /dev/null
-    then
-      echo -e "[  ${green}OK${NC}  ]"
-    else
-      echo -e "[$(red)FAILED$(NC)]"
-    fi
-  fi
+	echo -n "Starting $gameservice: "
+	if [ -e $lockfile ]
+	then
+		echo_failure
+		echo -e "\nThe lock file is present! Please verify the service status with the following command:"
+		echo "   ps -ef | grep .jar | sed '/grep/d'"
+		echo "If the process is not running, please delete the lockfile: $lockfile"
+		echo "Also check to see if any screens are running for $serverusername."
+		
+		echo -e "\n`date`\nERROR: $lockfile was present. Did not start.\n" >> $logfile 2>&1
+		exitcode=1
+	elif [ -e $pidfile ]
+	then
+		echo_failure
+		echo -e "\nThe PID file is present! Please verify the service status with the following command:"
+		echo "   ps -ef | grep .jar | sed '/grep/d'"
+		echo "If the process is not running, please delete the PID file: $pidfile"
+		echo "Also check to see if any screens are running for $serverusername."
+		
+		echo -e "\n`date`\nERROR: $pid file was present. Did not start.\n" >> $logfile 2>&1
+		exitcode=1
+	elif [ -e $job_lock ]
+	then
+		job_lockerror start
+	else
+		echo -e "##########################\n`date`\nStarting $gameservice from $origpath to $mcpath." >> $logfile 2>&1
+		job_lockmake
+		
+		if pgrep -u $serverusername -f $gameservice > /dev/null
+		then
+			echo_failure
+			echo -e "\nFound the service for $gameservice is already running for $serverusername, even though the PID and lock files are missing! Please kill the existing screen and restart the service."
+			
+			echo -e "ERROR: Service appears to be running when running pgrep -u $serverusername -f $gameservice. Did not start.\n##########################" >> $logfile 2>&1
+			job_locktrash
+			exitcode=1
+		else
+			# Verify that the .jar is actually present before rsync.
+			if [ -f $origpath/$gameservice ]
+			then
+				as_user "rsync -a --delete-after $origpath/ $mcpath" >> $logfile 2>&1
+				if [ $? = 0 ]
+				then
+					echo "rsync from $origpath to $mcpath successful." >> $logfile 2>&1
+					
+					mc_startandtouch
+					
+					echo "Service started successfully at `date`" >> $logfile 2>&1
+					job_locktrash
+				else
+					echo_failure
+					echo -e "\nrsync failed between $origpath and $mcpath! Verify both folders exist and have the appropriate permissions for $serverusername. Review $logfile for more info."
+					
+					job_locktrash
+					echo -e "EROR: rsync failed between $origpath and $mcpath. Did not start.\n##########################" >> $logfile 2>&1
+					exitcode=1
+				fi
+			else
+				echo_failure
+				echo -e "\n$gameservice appears to be missing from $origpath!"
+				
+				job_locktrash
+				echo -e "ERROR: $gameservice appears to be missing under $origpath! Verify it's named correctly in the init.d script and that it exists in the folder. Did not start.\n##########################" >> $logfile 2>&1
+				exitcode=1
+			fi
+		fi
+	fi
 }
 
-mc_saveoff() {
-  if pgrep -u $USERNAME -f $SERVICE > /dev/null
-  then
-    echo "$SERVICE is running... suspending saves"
-    as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-off\"\015'"
-    as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-all\"\015'"
-    sync
-    sleep 10
-  else
-    echo "$SERVICE is not running. Not suspending saves."
-  fi
-}
-
-mc_saveon() {
-  if pgrep -u $USERNAME -f $SERVICE > /dev/null
-  then
-    echo "$SERVICE is running... re-enabling saves"
-    as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-on\"\015'"
-  else
-    echo "$SERVICE is not running. Not resuming saves."
-  fi
-}
-
-mc_ramsave() {
-  if pgrep -u $USERNAME -f $SERVICE > /dev/null
-  then
-    echo -n "Backing up ramdrive to harddrive:                        "
-        ### NOTE: This rsync command is also in SaveCheck ###
-    as_user "rsync -a --delete $MCPATH $ORIGPATH" > /var/log/minecraft/rsync.log
-
-    if [ $? == 0 ]
-        then
-                echo -e "[  ${green}OK${NC}  ]"
-        else
-                echo -e "[$(red)FAILED$(NC)]"
-                echo -n "Backup failed. Review rsync.log"
-        fi
-  else
-        echo -e "[$(yellow)FAILED$(NC)]"
-        echo "$SERVICE is not running. Not saving RAMDisk."
-  fi
-}
-
-mc_savecheck() {
-        logtail=$(tail -n 4 /home/minecraft/ramdisk/logs/latest.log)
-        line1="] [Server thread/INFO]: Turned off world auto-saving
-"
-        line2="] [Server thread/INFO]: Saving...
-"
-        line3="] [Server thread/INFO]: Saved the world
-"
-        line4="] [Server thread/INFO]: Turned on world auto-saving"
-        usersonline=$(cat /srv/samba/raid/web/mconline/online.js)
-        zerousers='var usersonline = "";'
-
-        if [[ ("$usersonline" = "$zerousers") && ("$logtail" = "["*"$line1""["*"$line2""["*"$line3""["*"$line4") ]];
-        then
-                echo "Server inactive. Not saving to keep down log spam. Running rsync anyway."
-				as_user "rsync -a --delete $MCPATH $ORIGPATH" > /var/log/minecraft/rsync.log
-        else
-                mc_saveoff
-                mc_ramsave
-                mc_saveon
-        fi
+# This is broken out so we can use it in the restart command as well as the stop command.
+mc_checkserverstop() {
+	if pgrep -u $serverusername -f $gameservice > /dev/null
+	then
+		echo_warning
+		
+		if [ -e $pidfile ]
+		then
+			echo -en "\nScreen has not exited yet. Running killproc: "
+			killproc -p $pidfile >> $logfile 2>&1
+			
+			echo -e "WARNING: Screen is not exiting appropriately! Running killproc -p $pidfile" >> $logfile 2>&1
+			exitcode=1
+		else
+			echo -en "\nScreen has not exited yet. Running pkill: "
+			pkill -u $serverusername -f $gameservice
+			
+			echo -e "WARNING: Screen is not exiting appropriately! PID file $pidfile is missing. Running pkill -u $serverusername -f $gameservice" >> $logfile 2>&1
+			exitcode=1
+		fi
+		
+		if [ $? = 0 ]
+		then
+			echo "Service stopped successfully. Removing $pidfile and $lockfile." >> $logfile 2>&1
+			
+			echo_success
+			echo ""
+			as_user "rm -f $pidfile >> $logfile 2>&1"
+			
+			if [ $user == root ]
+			then
+				rm -f $lockfile >> $logfile 2>&1
+			else
+				as_user "sudo rm -f $lockfile >> $logfile 2>&1"
+			fi
+		else
+			echo_failure
+			echo -e "\nUnable to kill the screen! Was the PID file $pidfile missing?"
+			
+			echo -e "ERROR: Unable to kill screen for $gameservice!" >> $logfile 2>&1
+			exitcode=1
+		fi
+	else
+		echo -e "screen exited successfully. Removing PID and lock files $pidfile $lockfile." >> $logfile 2>&1
+		
+		echo_success
+		as_user "rm -f $pidfile >> $logfile 2>&1"
+		
+		if [ $user == root ]
+		then
+			rm -f $lockfile >> $logfile 2>&1
+		else
+			as_user "sudo rm -f $lockfile >> $logfile 2>&1"
+		fi
+	fi
+	
+	echo ""
 }
 
 mc_stop() {
-  if pgrep -u $USERNAME -f $SERVICE > /dev/null
-  then
-    echo -n "Stopping Minecraft Server:                               "
-    as_user "screen -p 0 -S minecraft -X eval 'stuff \"say SERVER SHUTTING DOWN IN 10 SECONDS. Saving map...\"\015'"
-    as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-all\"\015'"
-    sleep 10
-    as_user "screen -p 0 -S minecraft -X eval 'stuff \"stop\"\015'"
-    sleep 7
-  else
-    echo "$SERVICE was not running."
-  fi
-  if pgrep -u $USERNAME -f $SERVICE > /dev/null
-  then
-    echo -e "[$(red)FAILED$(NC)]"
-  else
-    echo -e "[  ${green}OK${NC}  ]"
-  fi
-
-  echo -n "Moving off of the RAMDisk...                             "
-  cd $MCPATH
-  as_user "rsync -a --delete * $ORIGPATH"
-  if [ "$?" == 0 ]
-  then
-    echo -e "[  ${green}OK${NC}  ]"
-        echo "Server is offline."
-  else
-    echo -e "[$(red)FAILED$(NC)]"
-  fi
+	# Verify the lock file and PID file are present. Warn if one is missing, don't launch the command if both are gone.
+	echo -n "Stopping $gameservice: "
+	if [ -e $lockfile ] && [ -e $pidfile ]
+	then
+		echo -e "\n`date`\nStopping $gameservice." >> $logfile 2>&1
+		continueshutdown=true
+	elif [ -e $lockfile ] || [ -e $pidfile ]
+	then
+		echo -e "\n`date`\nStopping $gameservice." >> $logfile 2>&1
+		echo_warning
+		echo -en "\nMissing the PID file and/or lock file! Something went wrong starting the service previously.\nAttempting to continue shutdown: "
+		
+		echo -e "WARNING: The PID or lock file is missing! Attempting to continue shutdown." >> $logfile 2>&1
+		continueshutdown=true
+		exitcode=1
+	elif [ -e $job_lock ]
+	then
+		echo -e "\n`date`\nStopping $gameservice." >> $logfile 2>&1
+		job_lockerror stop
+		continueshutdown=false
+	else
+		echo_failure
+		echo -e "\nServer is not running."
+		
+		continueshutdown=false
+		exitcode=1
+	fi
+	
+	if [ $continueshutdown == true ]
+	then
+		job_lockmake
+		
+		as_user "screen -p 0 -S minecraft -X eval 'stuff \"say SERVER SHUTTING DOWN IN 10 SECONDS. Saving map...\"\015'"
+		as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-all\"\015'"
+		sleep 10
+		as_user "screen -p 0 -S minecraft -X eval 'stuff \"stop\"\015'"
+		sleep 7
+	
+		mc_checkserverstop
+		
+		if [ ! -e $lockfile ] && [ ! -e $pidfile ]
+		then
+			echo -e "PID file and lock file removed successfully.\nrsyncing files from $mcpath to $origpath." >> $logfile 2>&1
+			
+			echo -n "Moving files back to $origpath: "
+			as_user "rsync -a --delete-after $mcpath/ $origpath" >> $logfile 2>&1
+			if [ $? = 0 ]
+			then
+				echo "rsync successful. Removing remaining files from $mcpath." >> $logfile 2>&1
+				
+				rm -rf $mcpath/* >> $logfile 2>&1
+				if [ $? = 0 ]
+				then
+					echo_success
+					echo ""
+					
+					echo -e "\nService appears to have shutdown appropriately. Finished running $gameservice at\n`date`" >> $logfile 2>&1
+				else
+					echo_failure
+					echo -e "\nUnable to clean directory $origpath! Refer to $logfile for more info."
+					
+					echo -e "ERROR: Files were not able to be removed from $mcpath! Review permissions for the folder.`date`" >> $logfile 2>&1
+					exitcode=1
+				fi
+			else
+				echo_failure
+				echo -e "\nUnable to move files from $mcpath to $origpath! Please review rsync permissions and folder permissions. Review $logfile for more info."
+				
+				echo -e "ERROR: Was unable to move files from $mcpath to $origpath! Verify rsync permissions with SELinux. Please review /var/log/audit/audit.log" >> $logfile 2>&1
+				exitcode=1
+			fi
+		else
+			echo "WARNING: Did not move files from $mcpath to $origpath! Please do this manually."
+			
+			echo -e "Clean shutdown was not executed! Files were NOT moved from $mcpath to $origpath. Please do this manually.\n`date`" >> $logfile 2>&1
+			exitcode=1
+		fi
+		
+		job_locktrash
+		echo "##########################" >> $logfile 2>&1
+	fi
 }
 
-mc_update() {
-  if pgrep -u $USERNAME -f $SERVICE > /dev/null
-  then
-    echo "$SERVICE is running! Will not start update."
-  else
-    MC_SERVER_URL=http://s3.amazonaws.com/MinecraftDownload/launcher/minecraft_server.jar?v=`date | sed "s/[^a-zA-Z0-9]/_/g"`
-    as_user "cd $MCPATH && wget -q -O $MCPATH/minecraft_server.jar.update $MC_SERVER_URL"
-    if [ -f $MCPATH/minecraft_server.jar.update ]
-    then
-      if `diff $MCPATH/$SERVICE $MCPATH/minecraft_server.jar.update >/dev/null`
-      then
-      if `diff $MCPATH/$SERVICE $MCPATH/minecraft_server.jar.update >/dev/null`
-      then
-        echo "You are already running the latest version of $SERVICE."
-      else
-        as_user "mv $MCPATH/minecraft_server.jar.update $MCPATH/$SERVICE"
-        echo "Minecraft successfully updated."
-      fi
-    else
-      echo "Minecraft update could not be downloaded."
-    fi
-  fi
+mc_restart() {
+	echo -n "Stopping $gameservice in RAMdisk: "
+	
+	if [ ! -e $job_lock ]
+	then
+		if [ -e $lockfile ] && [ -e $pidfile ]
+		then
+			echo -e "\n`date`\nRunning restart on $gameservice.\nStopping screen of $gameservice." >> $logfile 2>&1
+			job_lockmake
+			
+			as_user "screen -p 0 -S minecraft -X eval 'stuff \"say SERVER SHUTTING DOWN IN 10 SECONDS. Saving map...\"\015'"
+			as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-all\"\015'"
+			sleep 10
+			as_user "screen -p 0 -S minecraft -X eval 'stuff \"stop\"\015'"
+			sleep 7
+			
+			mc_checkserverstop
+			
+			echo -n "Starting $gameservice in RAMdisk: "
+			
+			mc_startandtouch
+		else
+			echo_failure
+			echo -e "\nService is not running! Run \"service minecraft start\" instead."
+			
+			exitcode=1
+		fi
+		
+		job_locktrash
+	else
+		job_lockerror restart
+	fi
+}
+
+mc_saveoff() {
+	as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-off\"\015'"
+	as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-all\"\015'"
+	sync
+	sleep 5
+}
+
+mc_saveon() {
+	as_user "screen -p 0 -S minecraft -X eval 'stuff \"save-on\"\015'"
+}
+
+mc_ramsave() {
+	as_user "rsync -a --delete-after $mcpath/ $origpath >> $logfile 2>&1"
+	
+	if [ $? == 0 ]
+	then
+		echo_success
+		echo ""
+		
+		echo -e "rsync successful at `date`." >> $logfile 2>&1
+	else
+		echo_failure
+		echo -e "\nrsync failed for RAMsave! Check the log file $logfile for details."
+		
+		echo -e "ERROR: rsync failed during the ramsave from $mcpath to $origpath! Review the output above (there should be some). If not, review /var/log/audit/audit.log, as SELinux permissions may be incorrect." >> $logfile 2>&1
+		exitcode=1
+	fi
+}
+
+mc_savecheck() {
+	if [ -e $job_lock ]
+	then
+		echo -n "Saving $gameservice & running rsync: "
+		job_lockerror RAMsave
+	elif [ -e $lockfile ] && [ -e $pidfile ]
+	then
+		echo -e "\n" >> $logfile 2>&1
+		date >> $logfile 2>&1
+		job_lockmake
+		
+		if [[ "$1" == "force" ]]
+		then
+			echo "Running a RAMsave with FORCE." >> $logfile 2>&1
+			
+			echo -n "Forcing save and rsync on $gameservice : "
+			mc_saveoff
+			mc_ramsave
+			mc_saveon
+		else
+			echo "Running a RAMsave." >> $logfile 2>&1
+			
+			echo -n "Saving $gameservice & running rsync: "
+			logtail=$(tail -n 4 $mcpath/logs/latest.log 2>> $logfile)
+			line1="] [Server thread/INFO]: Turned off world auto-saving
+"
+			line2="] [Server thread/INFO]: Saving...
+"
+			line3="] [Server thread/INFO]: Saved the world
+"
+			line4="] [Server thread/INFO]: Turned on world auto-saving"
+			
+			
+			# Check that the log output is the same as above AND nobody is connected.
+			# Check connection status by netstat.
+			if [[ ("$logtail" == "["*"$line1""["*"$line2""["*"$line3""["*"$line4") && (`netstat -n | grep 25565 | wc -l` -eq 0) ]]
+			then
+				echo "Determined that the server is inactive. Did not run save in $gameservice" >> $logfile 2>&1
+				
+				echo_passed
+				echo -en "\nServer inactive. Not saving to keep down log spam.\nRunning rsync anyway:"
+				mc_ramsave
+			else
+				mc_saveoff
+				mc_ramsave
+				mc_saveon
+			fi
+			
+			job_locktrash
+		fi
+	else
+		echo -e "##########################\n`date`\nERROR: RAMsave attempted, but the server is offline! Exiting.\n##########################" >> $logfile 2>&1
+		
+		echo -n "Saving $gameservice & running rsync: "
+		echo_failure
+		echo -e "\nServer is offline."
+		exitcode=1
+	fi
 }
 
 mc_backup() {
-   NOW=`date "+%Y-%m-%d_%H%M"`
-   BACKUP_FILE="$BACKUPPATH/backup_$NOW.tar.gz"
-   echo -n "Backing up minecraft world, including compression"
-   as_user "echo '*************************************'" >> /var/log/minecraft/tar.log 2>&1
-   as_user "echo -e 'Backup began at $NOW \n'" >> /var/log/minecraft/tar.log 2>&1
-   as_user "tar -C $ORIGPATH -zcf $BACKUP_FILE . --checkpoint=.1000"
-       if [ $? == 0 ]
-        then
-                echo -e "[  ${green}OK${NC}  ]"
-        else
-                echo -e "[$(red)FAILED$(NC)]"
-                echo -n "Backup failed. Review tar.log"
-        fi
-   as_user "echo -en '\nBackup finished at ' && date +'%Y-%m-%d %H%M'" >> /var/log/minecraft/tar.log 2>&1
-   as_user "du -h $BACKUP_FILE" >> /var/log/minecraft/tar.log 2>&1
+	rightnow=`date "+%Y-%m-%d_%H%M"`
+	backup_filename="$backuppath/backup_${rightnow}.tar.gz"
+	echo -n "Backing up $gameservice, including compression"
+	
+	echo "Running backup of $gameservice to file $backup_filename" >> $logfile 2>&1
+	
+	as_user "tar -C $origpath -zcf $backup_filename . --checkpoint=.1000 2>> $logfile"
+	
+	if [ $? == 0 ]
+	then
+		echo_success
+		filesize=$(ls -sh $backup_filename | cut -d ' ' -f1)
+		
+		echo -e "\nBackup file size is $filesize."
+		
+		echo "Backup successful. Backup file size is $filesize." >> $logfile 2>&1
+	else
+		echo_failure
+		echo -n "Backup failed."
+		
+		echo "Backup failed! There may be log output above. Check /var/log/audit/audit.log if SELinux is enabled." >> $logfile 2>&1
+		exitcode=1
+	fi
 }
-mc_command() {
-  command="$1";
-  if pgrep -u $USERNAME -f $SERVICE > /dev/null
-  then
-    pre_log_len=`wc -l "$MCPATH/server.log" | awk '{print $1}'`
-    echo "$SERVICE is running... executing command"
-    as_user "screen -p 0 -S minecraft -X eval 'stuff \"$command\"\015'"
-    sleep .1 # assumes that the command will run and print to the log file in less than .1 seconds
-    # print output
-    tail -n $[`wc -l "$MCPATH/server.log" | awk '{print $1}'`-$pre_log_len] "$MCPATH/server.log"
-  fi
-}
+
+
 
 #Start-Stop here
 case "$1" in
-  start)
-    mc_start
-    ;;
-  stop)
-    mc_stop
-    ;;
-  restart)
-    mc_stop
-    mc_start
-    ;;
-  update)
-    mc_stop
-    mc_backup
-    mc_update
-    mc_start
-    ;;
-  backup)
-    if pgrep -u $USERNAME -f $SERVICE > /dev/null
-    then
-        mc_saveoff
-        mc_ramsave
-        mc_backup
-        mc_saveon
-    else
-        echo "$SERVICE is not running. Proceeding with backup from disk location $ORIGPATH."
-        mc_backup
-    fi
-    ;;
-  ramsave)
-    mc_savecheck
-    ;;
-  status)
-    if pgrep -u $USERNAME -f $SERVICE > /dev/null
-    then
-      echo "$SERVICE is running."
-    else
-      echo "$SERVICE is not running."
-    fi
-    ;;
-  command)
-    if [ $# -gt 1 ]; then
-      shift
-      mc_command "$*"
-    else
-      echo "Must specify server command (try 'help'?)"
-    fi
-    ;;
-
-  *)
-  echo "Usage: $0 {start|stop|update|backup|status|restart|command \"server command\"}"
-  exit 1
-  ;;
+	start)
+		check_logpath
+		mc_start
+		;;
+	stop)
+		check_logpath
+		mc_stop
+		;;
+	restart)
+		check_logpath
+		mc_restart
+		;;
+	reload)
+		if [ -e $job_lock ]
+		then
+			job_lockerror reload
+		elif [ -e $lockfile ] && [ -e $pidfile ]
+		then
+			check_logpath
+			mc_stop
+			echo "Sleeping for 5 seconds before starting."
+			sleep 5
+			mc_start
+		else
+			echo -n "Reloading $gameservice: "
+			echo_failure
+			echo -e "\nService is not running! Run \"service minecraft start\" instead."
+			
+			echo -e "##########################\n`date`\nAttempted to run a reload on $gameservice while the server is offline. Are the lock and PID files missing? $lockfile $pidfile.\nExiting.\n##########################" >> $logfile 2>&1
+			exitcode=1
+		fi
+		;;
+	backup)
+		if [ -e $job_lock ]
+		then
+			echo -n "Running backup: "
+			job_lockerror backup
+		elif [ -e $lockfile ] && [ -e $pidfile ]
+		then
+			echo -e "\n" >> $logfile 2>&1
+			date >> $logfile 2>&1
+			job_lockmake
+			
+			check_logpath
+			echo -n "Saving $gameservice world: "
+			mc_saveoff
+			mc_ramsave
+			mc_backup
+			mc_saveon
+			
+			job_locktrash
+		else
+			echo -e "##########################\n`date`\nRunning a backup while the game service is offline." >> $logfile 2>&1
+			job_lockmake
+			
+			echo "$gameservice is not running. Proceeding with backup from disk location $origpath."
+			mc_backup
+			
+			job_locktrash
+			echo "##########################" >> $logfile 2>&1
+		fi
+		;;
+	ramsave)
+		check_logpath
+		mc_savecheck $2
+		;;
+	status)
+		if [ -e $lockfile ] && [ -e $pidfile ]
+		then
+			echo "$gameservice is running."
+			echo "There are `netstat -n | grep 25565 | wc -l` users online."
+		else
+			echo "$gameservice is not running."
+		fi
+		;;
+	command)
+		if [ $# -gt 1 ]; then
+			shift
+			mc_command "$*"
+		else
+			echo "Must specify server command (try 'help'?)"
+		fi
+		;;
+	*)
+		echo "Usage: $0 {start|stop|ramsave [force]|backup|status|restart|command \"server command\"}"
+		exitcode=1
+		;;
 esac
 
-exit 0
+exit $exitcode
