@@ -20,7 +20,7 @@ to ensure that disk space is not filled.
   OS failure.
 * Graceful shutdown and (if needed) process kills to prevent systems from hanging during shutdown procedures.
 * Engineered with paired SELinux rules (Refer to INSTALL.md).
-* Verbose logging.
+* Verbose logging paired with logrotation (Refer to INSTALL.md).
 * Easy printout of the number of users online via *service minecraft status*.
 * Easy service restarts to prevent from emptying the RAMdisk if the game needs to simply be reloaded.
 * Minimal in-game Minecraft logspam by not saving if no users have been online recently. RAMsaves can be
