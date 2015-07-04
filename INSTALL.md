@@ -50,4 +50,13 @@ More work may be required for other Linux distributions.
         tmpfs                   /opt/minecraft/service          tmpfs   defaults,size=2560m,uid=minecraft,gid=minecraft,fscontext=system_u:object_r:public_content_rw_t:s0 0 0  
 
 5. Create */etc/init.d/minecraft* and populate it with the Minecraft RAMdisk startup script. Ensure it has execute permissions.
-6. OPTIONAL: Have the service kick on during system startup by running *chkconfig minecraft on*.
+6. Create the log rotation file under /etc/logrotate.d/minecraft and populate it with the following:
+
+         /var/log/minecraft {
+            compress
+            size 20k
+            daily
+            create 0600 minecraft minecraft
+         }
+
+7. OPTIONAL: Have the service kick on during system startup by running *chkconfig minecraft on*.
