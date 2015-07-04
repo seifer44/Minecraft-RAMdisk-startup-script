@@ -1,35 +1,55 @@
 # Minecraft-RAMdisk-startup-script
 Run Minecraft from a RAMdisk while preserving the files on a HDD.
 
-This has been ran on CentOS 6.5+. This should work on other Linux distributions.
+This has been ran on CentOS 6.5+. This should work on other Linux distributions with a
+bit of modification, as the majority of the script is written in bash.
 
-This script has been built off of the Minecraft Wiki startup script (located here: http://minecraft.gamepedia.com/Tutorials/Server_startup_script ).
+This script has been built off of the Minecraft Wiki startup script
+(located here: http://minecraft.gamepedia.com/Tutorials/Server_startup_script ).
 
-**It is recommended to have your tmpfs mounted on boot via /etc/fstab.** I would also highly recommend a monitoring solution to watch the tmpfs's free space, such as with Nagios, to ensure that disk space is not filled.
+**It is recommended to have your tmpfs mounted on boot via /etc/fstab.** I would also
+***highly*** recommend a monitoring solution to watch the tmpfs's free space, such as with Nagios,
+to ensure that disk space is not filled.
 
 # Features
-* This script has a permanent backup to a second location. The primary location can be to the RAMdisk or another harddrive.
-* Backups are capable of being ran without shutting down the game server. Backups can still be ran if the server is offline.
-* The Minecraft server log spam is minimal when paired with the mconline.sh script (located here https://github.com/seifer44/mconlineusers ). In-game saves are not disabled and re-enabled during the rsync process if 0 users have logged in since the last RAMsave. **Note: this may need to be modified for servers that are not running vanilla jars that have extra log output. Review lines 137-143 & 147.**
+* Two types of locks are used in this script. 1) Prevent startup/shutdowns if the script appears to
+  be running/offline already, and 2) prevent other jobs from running if a job is already executing. This is
+  to prevent an rsync between both folders if you're already in the middle of shutting down the server,
+  for example (in this instance, you could've lost game data!).
+* Engineered for RAMdisks/tmpfs. Paired with a cronjob that keeps a backup copy on a HDD in case of an
+  OS failure.
+* Graceful shutdown and (if needed) process kills to prevent systems from hanging during shutdown procedures.
+* Engineered with paired SELinux rules (Refer to INSTALL.md).
+* Verbose logging.
+* Easy printout of the number of users online via *service minecraft status*.
+* Easy service restarts to prevent from emptying the RAMdisk if the game needs to simply be reloaded.
+* Minimal in-game Minecraft logspam by not saving if no users have been online recently. RAMsaves can be
+  forced if necessary.
+* Full offline and online backups in .tar.gz format.
+* Minecraft server command execution from system CLI.
+* A few other integrity checks.
 
 # Extra Variables
 
-*$MCPATH* - Your RAMdisk location where the game exists temporarily.
+*$mcpath* - Your RAMdisk location where the game exists temporarily.
 
-*$ORIGPATH* - The permanent location where game files are stored.
+*$origpath* - The permanent location where game files are stored.
 
-*$BACKUPPATH* - Where you wish to have archived backups stored.
+*$backuppath* - Where you wish to have archived backups stored.
 
-# Optimal functionality
-* In the $USERNAME's crontab, ensure a ramsave is ran regularly. Example for hourly saves:
-  0 * * * * /sbin/service minecraft ramsave > /var/log/minecraft/ramsave.log
-* In the $USERNAME's crontab, ensure a full backup is ran regularly (REFER TO ISSUE #1). Example of daily saves:
-  5 5 * * * /sbin/service minecraft backup > /var/log/minecraft/backup.log
-* You may need to edit SELinux permissions for scheduling rsync in the crontab if it's active in your distribution.
+*$lockfile* - OS recognized lock file.
+
+*$pidfile* - PID file for Minecraft kills (if necessary).
+
+*$job_lock* - Lock file to prevent cron entries (or other users) from executing jobs during another job.
+
+# Recommended Software
+It is **highly** recommended to have an alert configured if your RAMdisk is low on disk space! A service such as
+Nagios is recommended, although you could also write a cron job to email alerts as well.
 
 # Issues
-1. Backups do not appear to function correctly when executed from a user other than $USERNAME. I'm working on a fix for that still.
-2. If you wish to have the game start from boot and you're mounting via fstab, I would recommend launching the service via crontab under the user instead of in chkconfig. This ensures that the tmpfs has been mounted before starting the server. I have yet to engineer a workaround into the script. If goign this route, this means that, upon shutdown, the game is not closed appropriately. Please shut down the game manually before reboot.
-3. Relies upon the mconline.sh script (located here https://github.com/seifer44/mconlineusers ) for checking if users are online.
-4. The rsync command with the --delete switch can cause issues if the server has a severe crash and data is lost in either location. This switch can be removed if necessary, but should be re-enabled during server upgrades.
-5. RAMsave will throw an error of the mconline.sh output file is not present or in the default javascript format. Need to implement a workaround and a variable.
+1. The rsync command with the --delete switch can cause issues if the server has a severe crash and data is lost
+   in either location. This switch can be removed if necessary, but should be re-enabled during server upgrades.
+2. Need integrity checks for users that don't have appropriate permissions to su to the $gameservice user.
+3. Need to thoroughly test script for users that don't have appropriate permissions for service files.
+4. Backup cleanup task needs to be added.
