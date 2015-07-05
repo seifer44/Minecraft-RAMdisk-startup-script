@@ -1,7 +1,7 @@
 # Minecraft-RAMdisk-startup-script
 Run Minecraft from a RAMdisk while preserving the files on a HDD.
 
-This has been ran on CentOS 6.5+. This should work on other Linux distributions with a
+This has been ran and optimized on CentOS 6.5+ and Ubuntu 14.04. This should work on other Linux distributions with a
 bit of modification, as the majority of the script is written in bash.
 
 This script has been built off of the Minecraft Wiki startup script
@@ -19,7 +19,7 @@ to ensure that disk space is not filled.
 * Engineered for RAMdisks/tmpfs. Paired with a cronjob that keeps a backup copy on a HDD in case of an
   OS failure.
 * Graceful shutdown and (if needed) process kills to prevent systems from hanging during shutdown procedures.
-* Engineered with paired SELinux rules (Refer to INSTALL.md).
+* Engineered with paired SELinux rules (CentOS only. Refer to INSTALL.md).
 * Verbose logging paired with logrotation (Refer to INSTALL.md).
 * Easy printout of the number of users online via *service minecraft status*.
 * Easy service restarts to prevent from emptying the RAMdisk if the game needs to simply be reloaded.
