@@ -10,7 +10,7 @@
 # 2015-07-03
 #
 # https://github.com/seifer44/Minecraft-RAMdisk-startup-script/
-# Version 2.0
+# Version 2.0.1
 #
 ##############################################################
 #
@@ -143,7 +143,7 @@ job_locktrash() {
 mc_startandtouch() {
 	echo "Beginning the screen session at `date`." >> $logfile 2>&1
 	
-	as_user "cd $mcpath && screen -h $screenhistory -dmS minecraft $invocation"
+	as_user "cd $mcpath && screen -h $screenhistory -dmS minecraft $invocation >> $logfile 2>&1"
 	
 	if [ $? = 0 ]
 	then
@@ -242,8 +242,18 @@ mc_start() {
 					
 					mc_startandtouch
 					
-					echo "Service started successfully at `date`" >> $logfile 2>&1
-					job_locktrash
+					if [ $? = 0 ]
+					then
+						echo "Service started successfully at `date`" >> $logfile 2>&1
+						job_locktrash
+					elif [ $? = 1 ]
+					then
+						echo "ERROR: Service encountered problems while starting at `date`! Did not start." >> $logfile 2>&1
+						job_locktrash
+						echo "##########################" >> $logfile 2>&1
+					else
+						job_locktrash
+					fi
 				else
 					echo_failure
 					echo -e "\nrsync failed between $origpath and $mcpath! Verify both folders exist and have the appropriate permissions for $serverusername. Review $logfile for more info."
