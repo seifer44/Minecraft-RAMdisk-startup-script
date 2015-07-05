@@ -10,7 +10,7 @@
 # 2015-07-03
 #
 # https://github.com/seifer44/Minecraft-RAMdisk-startup-script/
-# Version 2.0.1
+# Version 2.0.2
 #
 ##############################################################
 #
@@ -90,7 +90,13 @@ as_user() {
 }
 
 check_logpath() {
-	if [ `ls -l $logfile | grep minecraft | cut -f3 -d " "` != $serverusername ]
+	if [ ! -e $logfile ]
+	then
+		echo_failure
+		echo -e "\nLog file $logfile doesn't exist! Please create it or update the script variable \$logfile with the appropriate file path. Exiting."
+		
+		exit 1
+	elif [ `ls -l $logfile | grep minecraft | cut -f3 -d " "` != $serverusername ]
 	then
 		echo -n "Logging permissions: "
 		echo_failure
@@ -248,7 +254,15 @@ mc_start() {
 						job_locktrash
 					elif [ $? = 1 ]
 					then
-						echo "ERROR: Service encountered problems while starting at `date`! Did not start." >> $logfile 2>&1
+						echo -e "ERROR: Service encountered problems while starting at `date`! Did not start.\nRemoving $mcpath files since we didn't modify anything." >> $logfile 2>&1
+						rm -rf $mcpath/* >> $logfile 2>&1
+						
+						if [ $? = 0 ]
+						then
+							echo "Cleaned up $mcpath successfully." >> $logfile 2>&1
+						else
+							echo "ERROR: Did NOT clean up $mcpath successfully!" >> $logfile 2>&1
+						fi
 						job_locktrash
 						echo "##########################" >> $logfile 2>&1
 					else
